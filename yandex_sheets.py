@@ -26,7 +26,6 @@ def get_sheet_data() -> dict[str, float | None]:
     wb = CalamineWorkbook.from_filelike(io.BytesIO(file_resp.content))
     rows = wb.get_sheet_by_name(SHEET_NAME).to_python()
 
-    # Словарь вида: {"Фамилия Имя Отчество": days_left}
     employees_data: dict[str, float | None] = {}
 
     for idx in range(2, len(rows)):
@@ -36,7 +35,6 @@ def get_sheet_data() -> dict[str, float | None]:
 
         if emp and str(emp).strip():
             emp_name = str(emp).strip()
-            # Преобразуем число дней в float или None, если пусто
             parsed_days = float(days) if isinstance(days, (int, float)) else None
             employees_data[emp_name] = parsed_days
 
