@@ -1,7 +1,7 @@
-import io
 import os
+import tempfile
 import httpx
-from python_calamine import CalamineWorkbook
+import fastexcel
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,19 +23,31 @@ def get_sheet_data() -> dict[str, float | None]:
         file_resp = client.get(download_url)
         file_resp.raise_for_status()
 
-    wb = CalamineWorkbook.from_filelike(io.BytesIO(file_resp.content))
-    rows = wb.get_sheet_by_name(SHEET_NAME).to_python()
+    # Сохраняем во временный файл для fastexcel
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(file_resp.content)
+        tmp_path = tmp.name
 
-    employees_data: dict[str, float | None] = {}
+    try:
+        excel = fastexcel.read_excel(tmp_path)
+        # header_row=1 означает, что заголовки находятся во 2-й строке Excel (индексация с 0)
+        sheet = excel.load_sheet_by_name(SHEET_NAME, header_row=1)
+        data_dict = sheet.to_arrow().to_pydict()
 
-    for idx in range(2, len(rows)):
-        row = rows[idx]
-        emp = row[0] if len(row) > 0 else None
-        days = row[10] if len(row) > 10 else None
+        cols = list(data_dict.values())
+        employees = cols[0]   # Колонка A: Сотрудник
+        days_list = cols[10]  # Колонка K: Осталось до смены пароля
 
-        if emp and str(emp).strip():
-            emp_name = str(emp).strip()
-            parsed_days = float(days) if isinstance(days, (int, float)) else None
-            employees_data[emp_name] = parsed_days
+        employees_data: dict[str, float | None] = {}
+        for emp, days in zip(employees, days_list):
+            if emp and str(emp).strip():
+                emp_name = str(emp).strip()
+                parsed_days = float(days) if isinstance(days, (int, float)) else None
+                employees_data[emp_name] = parsed_days
 
-    return employees_data
+        return employees_data
+
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
