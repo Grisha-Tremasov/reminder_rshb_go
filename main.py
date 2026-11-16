@@ -1,5 +1,7 @@
 import asyncio
+import datetime
 import os
+from zoneinfo import ZoneInfo
 from aiogram import Bot, Dispatcher
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
@@ -31,13 +33,13 @@ async def cmd_start(message: Message, state: FSMContext):
     if existing_user:
         await message.answer(
             f"Вы уже зарегистрированы как: **{existing_user[0]}**\n\n"
-            f"Если хотите сменить ФИО, просто отправьте новое в этот чат.",
+            f"Если хотите изменить ФИО, введите новое ФИО сообщением:",
             parse_mode="Markdown",
         )
     else:
         await message.answer(
-            "Здравствуйте! Я бот оповещений о смене пароля.\n\n"
-            "Введите ваше **ФИО** (точно так, как в таблице):",
+            "Здравствуйте! Я бот оповещений о смене пароля учетных записей.\n\n"
+            "Пожалуйста, введите ваше **ФИО** (в точности как в таблице):",
             parse_mode="Markdown",
         )
     await state.set_state(Registration.waiting_for_name)
@@ -56,7 +58,7 @@ async def process_name(message: Message, state: FSMContext):
 
         if not matched:
             await message.answer(
-                f"❌ Сотрудник «{user_name}» не найден в таблице.\n"
+                f"❌ Сотрудник «{user_name}» не найден в таблице на листе «УЗ ПРОД».\n"
                 f"Проверьте написание и введите ФИО снова:"
             )
             return
@@ -64,13 +66,12 @@ async def process_name(message: Message, state: FSMContext):
         db.save_user(message.chat.id, matched)
         days = sheet_data[matched]
 
-        # Сразу отдаем подробный статус и предупреждение
         status_text = scheduler.build_status_message(matched, days)
 
         await message.answer(
             f"✅ Вы успешно зарегистрированы!\n\n"
             f"{status_text}\n\n"
-            f"📅 Напоминания будут приходить по рабочим дням в 10:00, если до смены останется 3 рабочих дня или меньше.",
+            f"📅 Напоминания приходят по рабочим дням в 10:00 (МСК), если до блокировки 3 рабочих дня или меньше.",
             parse_mode="Markdown",
         )
         await state.clear()
@@ -79,15 +80,27 @@ async def process_name(message: Message, state: FSMContext):
         await message.answer(f"⚠️ Ошибка при обращении к таблице: {e}")
 
 
+async def startup_catchup():
+    """Если бот включился после 10:00 МСК, досылаем пропущенное за сегодня."""
+    now_msk = datetime.datetime.now(ZoneInfo("Europe/Moscow"))
+    if now_msk.weekday() < 5 and now_msk.hour >= 10:
+        print("Запуск проверки пропущенных напоминаний за сегодня...")
+        await scheduler.run_daily_check(bot)
+
+
 async def main():
     db.init_db()
 
-    # Запуск планировщика: пн-пт в 10:00 (по МСК)
+    # Запускаем наверстывание пропущенных сообщений при старте
+    asyncio.create_task(startup_catchup())
+
+    # Планировщик на 10:00 по МСК (Пн-Пт)
     sched = AsyncIOScheduler(timezone="Europe/Moscow")
     sched.add_job(
         scheduler.run_daily_check,
         trigger=CronTrigger(day_of_week="mon-fri", hour=10, minute=0),
         args=[bot],
+        misfire_grace_time=3600,  # Если задача опоздала до 1 часа — всё равно выполнить
     )
     sched.start()
 
@@ -97,3 +110,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
